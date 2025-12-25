@@ -140,13 +140,14 @@ func runBuild(_ *cobra.Command, _ []string) (string, error) {
 		if errors.Is(err, os.ErrNotExist) || info == nil {
 			return "", fmt.Errorf("package `%s` does not exist", buildPackage)
 		}
+		var relDir string
 		if info.IsDir() {
-			relDir, _ := filepath.Rel(goModDir, filepath.Join(currentDir, buildPackage))
-			buildPackage = path.Join(moduleName, relDir)
+			relDir, _ = filepath.Rel(goModDir, filepath.Join(currentDir, buildPackage))
 		} else {
-			relDir, _ := filepath.Rel(goModDir, filepath.Join(currentDir, filepath.Dir(buildPackage)))
-			buildPackage = path.Join(moduleName, relDir)
+			relDir, _ = filepath.Rel(goModDir, filepath.Join(currentDir, filepath.Dir(buildPackage)))
 		}
+		relDir = strings.ReplaceAll(relDir, "\\", "/")
+		buildPackage = path.Join(moduleName, relDir)
 	}
 
 	bldArgs = append(bldArgs, buildPackage)
