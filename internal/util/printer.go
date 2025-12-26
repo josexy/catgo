@@ -6,6 +6,8 @@ import (
 	"github.com/fatih/color"
 )
 
+var Output = color.Output
+
 type ColorPrinter struct {
 	Green     *color.Color
 	Red       *color.Color

@@ -75,9 +75,14 @@ catgo build --target linux/amd64
 
 # Build specific package
 catgo build --package ./cmd/server
+catgo build -p cmd/server/main.go
+catgo build -p github.com/username/myproject/pkg/examples
 
 # Build to current directory instead of bin/
 catgo build --local
+
+# Build to custom binary name instead of module package name
+catgo build --output mybinary
 
 # Disable CGO
 catgo build --cgo-zero
@@ -92,7 +97,7 @@ catgo build --set "main.Version=1.0.0" --set "main.BuildTime=$(date)"
 ### Running Your Project
 
 ```bash
-# Build and run
+# Build and run(same flags to the bulid sub-command)
 catgo run
 
 # Pass arguments to the binary
@@ -116,6 +121,19 @@ catgo add github.com/gin-gonic/gin --rev v1.9.0
 
 # Remove dependencies
 catgo remove github.com/gin-gonic/gin
+```
+
+### Unit testing
+
+```bash
+# Test all packages
+catgo test
+
+# Pass arguments to the test binary
+catgo test -- --config prod.ym
+
+# Test one package
+catgo test --run ^Test --package ./pkg/tests --verbose --count 1
 ```
 
 ### Other Commands

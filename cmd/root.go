@@ -29,6 +29,7 @@ func init() {
 	rootCommand.AddCommand(removeCommand)
 	rootCommand.AddCommand(versionCommand)
 	rootCommand.AddCommand(vendorCommand)
+	rootCommand.AddCommand(testCommand)
 }
 
 func Execute() {

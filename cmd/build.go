@@ -123,31 +123,8 @@ func runBuild(_ *cobra.Command, _ []string) (string, error) {
 		env = append(env, "CGO_ENABLED=0")
 	}
 
-	goModDir, err := util.CurrentGoModDir()
-	if err != nil {
+	if buildPackage, err = parseToGoPackage(moduleName, buildPackage); err != nil {
 		return "", err
-	}
-	currentDir, err := util.CurrentDir()
-	if err != nil {
-		return "", err
-	}
-
-	if buildPackage == "" || buildPackage == "." {
-		relDir, _ := filepath.Rel(goModDir, currentDir)
-		buildPackage = path.Join(moduleName, relDir)
-	} else if !strings.HasPrefix(buildPackage, moduleName) {
-		info, err := os.Stat(buildPackage)
-		if errors.Is(err, os.ErrNotExist) || info == nil {
-			return "", fmt.Errorf("package `%s` does not exist", buildPackage)
-		}
-		var relDir string
-		if info.IsDir() {
-			relDir, _ = filepath.Rel(goModDir, filepath.Join(currentDir, buildPackage))
-		} else {
-			relDir, _ = filepath.Rel(goModDir, filepath.Join(currentDir, filepath.Dir(buildPackage)))
-		}
-		relDir = strings.ReplaceAll(relDir, "\\", "/")
-		buildPackage = path.Join(moduleName, relDir)
 	}
 
 	bldArgs = append(bldArgs, buildPackage)
@@ -162,6 +139,35 @@ func runBuild(_ *cobra.Command, _ []string) (string, error) {
 	}
 	util.Printer.PrintFinished(profile, util.FormatDuration(time.Since(startTime)))
 	return target, nil
+}
+
+func parseToGoPackage(moduleName, packageName string) (string, error) {
+	goModDir, err := util.CurrentGoModDir()
+	if err != nil {
+		return "", err
+	}
+	currentDir, err := util.CurrentDir()
+	if err != nil {
+		return "", err
+	}
+	if packageName == "" || packageName == "." {
+		relDir, _ := filepath.Rel(goModDir, currentDir)
+		packageName = path.Join(moduleName, relDir)
+	} else if !strings.HasPrefix(packageName, moduleName) {
+		info, err := os.Stat(packageName)
+		if errors.Is(err, os.ErrNotExist) || info == nil {
+			return "", fmt.Errorf("package `%s` does not exist", packageName)
+		}
+		var relDir string
+		if info.IsDir() {
+			relDir, _ = filepath.Rel(goModDir, filepath.Join(currentDir, packageName))
+		} else {
+			relDir, _ = filepath.Rel(goModDir, filepath.Join(currentDir, filepath.Dir(packageName)))
+		}
+		relDir = path.Join(filepath.SplitList(relDir)...)
+		packageName = path.Join(moduleName, relDir)
+	}
+	return packageName, nil
 }
 
 func parseBuildTarget(name, buildTarget string) (targetOS, targetArch, targetName string) {
