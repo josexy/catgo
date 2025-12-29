@@ -129,11 +129,29 @@ catgo remove github.com/gin-gonic/gin
 # Test all packages
 catgo test
 
-# Pass arguments to the test binary
-catgo test -- --config prod.ym
+# Test with verbose output
+catgo test --verbose
 
-# Test one package
-catgo test --run ^Test --package ./pkg/tests --verbose --count 1
+# Test a specific package
+catgo test --package ./cmd
+
+# Run specific tests matching a pattern
+catgo test --run ^TestBuild
+
+# Run tests multiple times to catch flaky tests
+catgo test --count 10
+
+# Enable race detector
+catgo test --race
+
+# Set a timeout for tests
+catgo test --timeout 30s
+
+# Combine multiple options
+catgo test --package ./internal/util --run ^TestExec --verbose --count 3
+
+# Pass arguments to the test binary after --
+catgo test -- -custom-flag value
 ```
 
 ### Other Commands
@@ -198,6 +216,21 @@ Add dependencies to the project.
 ### `catgo remove <package>...`
 
 Remove dependencies from the project.
+
+### `catgo test`
+
+Run tests for the local package with enhanced output formatting.
+
+**Flags:**
+- `-r, --run <pattern>`: Run only tests matching the regular expression (default: `^Test`)
+- `-p, --package <path>`: Package to test (default: `./...` for all packages)
+- `-c, --count <n>`: Number of times to run each test (default: 1)
+- `-t, --timeout <duration>`: Time limit for each test (e.g., `30s`, `5m`)
+- `--race`: Enable race detector
+- `-v, --verbose`: Show verbose output including test logs
+- Use `--` to pass additional arguments to the test binary
+
+**Note:** This command wraps `go test -json` and provides colorized, formatted output with test summaries.
 
 ### `catgo clean`
 
