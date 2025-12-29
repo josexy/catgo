@@ -26,6 +26,11 @@ var Printer = &ColorPrinter{
 	BoldGreen: color.New(color.FgGreen, color.Bold),
 }
 
+func (p *ColorPrinter) PrintTesting(target string) {
+	p.BoldGreen.Print("   Testing")
+	fmt.Printf(" %s\n", target)
+}
+
 func (p *ColorPrinter) PrintCompiling(target string) {
 	p.BoldGreen.Print("   Compiling")
 	fmt.Printf(" %s\n", target)

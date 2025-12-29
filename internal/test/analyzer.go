@@ -3,10 +3,12 @@ package test
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
 	"sync"
+	"text/tabwriter"
 	"time"
 
 	"github.com/josexy/catgo/internal/util"
@@ -17,6 +19,11 @@ const (
 	passTestPrefix = "--- PASS:"
 	failTestPrefix = "--- FAIL:"
 	skipTestPrefix = "--- SKIP:"
+
+	bigPass        = "PASS"
+	bigFailNewLine = "FAIL\n"
+	noTestPrefix   = "?   \t"
+	okPrefix       = "ok  \t"
 )
 
 type TestStatus int
@@ -29,18 +36,54 @@ const (
 	StatusBuildFail
 )
 
-type TestResult struct {
-	Status        TestStatus
-	PassedTests   int
-	FailedTests   int
-	SkippedTests  int
-	HasBuildError bool
-	TestDuration  time.Duration
+func (status TestStatus) String() string {
+	switch status {
+	case StatusPass:
+		return "PASS"
+	case StatusSkip:
+		return "SKIPPED"
+	case StatusBuildFail, StatusFail:
+		return "FAILED"
+	}
+	return "UNKNOWN"
 }
 
-type UnitTest struct {
-	Name   string
-	Status TestStatus
+type TestEvent struct {
+	// encodes as an RFC3339-format string
+	Time time.Time
+	// start  - the test binary is about to be executed
+	// run    - the test has started running
+	// pause  - the test has been paused
+	// cont   - the test has continued running
+	// pass   - the test passed
+	// bench  - the benchmark printed log output but did not fail
+	// fail   - the test or benchmark failed
+	// output - the test printed output
+	// skip   - the test was skipped or the package contained no tests
+	Action      string
+	Package     string
+	Test        string
+	Elapsed     float64 // seconds
+	Output      string
+	FailedBuild string
+}
+
+type PackageTestEvent struct {
+	PackageName string
+	Status      TestStatus
+	Elapsed     time.Duration
+	UnitTests   map[string]*UnitTestEvent
+
+	PassedTests  int
+	FailedTests  int
+	SkippedTests int
+}
+
+type UnitTestEvent struct {
+	TestName string
+	Time     time.Time
+	Status   TestStatus
+	Elapsed  time.Duration
 }
 
 type LinesOutputAnalyzer struct {
@@ -48,23 +91,20 @@ type LinesOutputAnalyzer struct {
 	wr          io.Writer
 	currentLine bytes.Buffer
 
-	status        TestStatus
-	passedTests   int
-	failedTests   int
-	skippedTests  int
-	hasBuildError bool
-	testDuration  time.Duration
+	moduleName string
+	verbose    bool
+	wg         sync.WaitGroup
 
-	verbose bool
-	wg      sync.WaitGroup
+	events map[string]*PackageTestEvent
 }
 
-func New(reader io.Reader, writer io.Writer, verbose bool) *LinesOutputAnalyzer {
+func New(reader io.Reader, moduleName string, verbose bool) *LinesOutputAnalyzer {
 	analyzer := &LinesOutputAnalyzer{
-		wr:      writer,
-		verbose: verbose,
-		br:      bufio.NewReader(reader),
-		status:  StatusUnknown,
+		moduleName: moduleName,
+		verbose:    verbose,
+		wr:         util.Output,
+		br:         bufio.NewReader(reader),
+		events:     make(map[string]*PackageTestEvent, 128),
 	}
 	analyzer.wg.Go(analyzer.runner)
 	return analyzer
@@ -73,129 +113,195 @@ func New(reader io.Reader, writer io.Writer, verbose bool) *LinesOutputAnalyzer 
 func (a *LinesOutputAnalyzer) Wait() { a.wg.Wait() }
 
 func (a *LinesOutputAnalyzer) runner() {
-	defer func() {
-		r := a.GetResult()
-		var status string
-		if r.IsSuccess() {
-			status = util.Printer.Green.Sprint("ok")
-		} else {
-			status = util.Printer.Red.Sprint("fail")
-		}
-		fmt.Fprintf(util.Output, "\ntest result: %s. %d passed; %d failed, %d ignored; finished in %s\n",
-			status, r.PassedTests, r.FailedTests, r.SkippedTests, r.TestDuration.String())
-	}()
+	var err error
 	for {
-		line, _, err := a.br.ReadLine()
-		if err == io.EOF {
-			break
-		}
+		var line []byte
+		line, _, err = a.br.ReadLine()
 		if err != nil {
+			if err == io.EOF {
+				err = nil
+			}
 			break
 		}
-		a.analyzeLine(string(line))
+		var event TestEvent
+		if err = json.Unmarshal(line, &event); err != nil {
+			break
+		}
+		if err = a.analyzeEvent(&event); err != nil {
+			break
+		}
 	}
+	if err != nil {
+		return
+	}
+	a.printTestSummary()
 }
 
-func (a *LinesOutputAnalyzer) analyzeLine(line string) {
-	defer func() {
-		switch a.status {
-		case StatusPass:
-			util.Printer.Green.Fprintf(a.wr, "%s\n", line)
-		case StatusFail, StatusBuildFail:
-			util.Printer.Red.Fprintf(a.wr, "%s\n", line)
-		case StatusSkip:
-			util.Printer.Cyan.Fprintf(a.wr, "%s\n", line)
-		case StatusUnknown:
-			fmt.Fprintf(a.wr, "%s\n", line)
+func (a *LinesOutputAnalyzer) printTestSummary() {
+	tw := tabwriter.NewWriter(a.wr, 0, 0, 3, ' ', 0)
+	fmt.Fprintln(tw)
+	fmt.Fprintln(a.wr, "Test summary:")
+	fmt.Fprintln(tw, "PACKAGE\tSTATUS\tPASSED\tFAILED\tSKIPPED\tELAPSED")
+	defer tw.Flush()
+	var totalPassed, totalFailed, totalSkipped int
+	var totalElapsed time.Duration
+	for packageName, pv := range a.events {
+		totalPassed += pv.PassedTests
+		totalFailed += pv.FailedTests
+		totalSkipped += pv.SkippedTests
+		totalElapsed += pv.Elapsed
+		fmt.Fprintf(tw, "%s\t%s\t%d\t%d\t%d\t%s\n",
+			formatPackage(packageName, a.moduleName),
+			pv.Status.String(),
+			pv.PassedTests,
+			pv.FailedTests,
+			pv.SkippedTests,
+			pv.Elapsed.String(),
+		)
+	}
+	fmt.Fprintln(tw)
+	fmt.Fprintf(a.wr, "test result: %d passed, %d failed, %d skipped, finished in %s\n\n",
+		totalPassed,
+		totalFailed,
+		totalSkipped,
+		totalElapsed.String(),
+	)
+}
+
+func (a *LinesOutputAnalyzer) analyzeEvent(event *TestEvent) error {
+	switch event.Action {
+	case "start":
+		pv := &PackageTestEvent{
+			PackageName: event.Package,
+			Status:      StatusUnknown,
+			UnitTests:   make(map[string]*UnitTestEvent, 16),
 		}
-	}()
-	trimmed := strings.TrimSpace(line)
-
-	if strings.HasPrefix(trimmed, "ok") {
-		parts := strings.Fields(trimmed)
-		if len(parts) > 2 {
-			d, _ := time.ParseDuration(parts[2])
-			a.testDuration += d
+		a.events[event.Package] = pv
+		a.printPackageEvent(pv)
+	case "run":
+		pv, ok := a.events[event.Package]
+		if !ok {
+			return fmt.Errorf("invalid [%s] event for package: %s", event.Action, event.Package)
 		}
-		a.status = StatusPass
-		return
-	}
-	if strings.HasPrefix(trimmed, "PASS") {
-		a.status = StatusPass
-		return
-	}
-	if strings.HasPrefix(trimmed, "FAIL") {
-		parts := strings.Fields(trimmed)
-		if len(parts) > 2 {
-			d, _ := time.ParseDuration(parts[2])
-			a.testDuration += d
+		uv := &UnitTestEvent{
+			TestName: event.Test,
+			Time:     event.Time,
+			Status:   StatusUnknown,
 		}
-		a.status = StatusFail
-		return
+		pv.UnitTests[event.Test] = uv
+		a.printUnitTestEvent(event.Package, uv)
+	case "build-output", "output":
+		if a.verbose && len(event.Output) > 0 {
+			if filterNoneOutputTestLog(event.Output) {
+				break
+			}
+			fmt.Fprint(a.wr, event.Output)
+		}
+	case "pass":
+		return a.updateEvent(event, StatusPass)
+	case "fail":
+		return a.updateEvent(event, StatusFail)
+	case "skip":
+		return a.updateEvent(event, StatusSkip)
 	}
+	return nil
+}
 
-	if strings.Contains(line, "can't load package") ||
-		strings.Contains(line, "cannot find package") ||
-		strings.Contains(line, "undefined:") {
-		a.hasBuildError = true
-		a.status = StatusBuildFail
-		return
+func filterNoneOutputTestLog(s string) bool {
+	return strings.HasPrefix(s, runTestPrefix) ||
+		strings.HasPrefix(s, passTestPrefix) ||
+		strings.HasPrefix(s, skipTestPrefix) ||
+		strings.HasPrefix(s, failTestPrefix) ||
+		strings.HasPrefix(s, bigPass) ||
+		strings.HasPrefix(s, bigFailNewLine) ||
+		strings.HasPrefix(s, noTestPrefix) ||
+		strings.HasPrefix(s, okPrefix)
+}
+
+func (a *LinesOutputAnalyzer) updateEvent(event *TestEvent, status TestStatus) error {
+	pv, ok := a.events[event.Package]
+	if !ok {
+		return fmt.Errorf("invalid [%s] event for package: %s", event.Action, event.Package)
 	}
+	if event.Test != "" {
+		if uv, ok := pv.UnitTests[event.Test]; ok {
+			switch status {
+			case StatusPass:
+				pv.PassedTests++
+			case StatusFail:
+				pv.FailedTests++
+			case StatusSkip:
+				pv.SkippedTests++
+			}
+			uv.Status = status
+			uv.Elapsed = time.Duration(event.Elapsed * float64(time.Second))
+			a.printUnitTestEventResult(event.Package, uv)
+		}
+	} else {
+		// treat skip as pass for package level
+		if event.Action == "skip" {
+			status = StatusPass
+		}
+		if event.Action == "fail" && len(event.FailedBuild) > 0 {
+			status = StatusBuildFail
+		}
+		pv.Status = status
+		pv.Elapsed = time.Duration(event.Elapsed * float64(time.Second))
+		a.printPackageEventResult(pv)
+	}
+	return nil
+}
 
-	// Check for unit test results
-	ut := parseUnitTest(trimmed)
-	a.status = ut.Status
+func (a *LinesOutputAnalyzer) printPackageEvent(pv *PackageTestEvent) {
+	util.Printer.PrintTesting(fmt.Sprintf("package %s", pv.PackageName))
+}
 
-	switch ut.Status {
+func (a *LinesOutputAnalyzer) printPackageEventResult(pv *PackageTestEvent) {
+	util.Printer.BoldGreen.Print("   Finished")
+	fmt.Fprintf(a.wr, " test package(%s) result: %s, %d passed, %d failed, %d skipped, finished in %s\n",
+		pv.PackageName,
+		prettyStatus(pv.Status),
+		pv.PassedTests,
+		pv.FailedTests,
+		pv.SkippedTests,
+		pv.Elapsed.String(),
+	)
+}
+
+func (a *LinesOutputAnalyzer) printUnitTestEventResult(name string, uv *UnitTestEvent) {
+	switch uv.Status {
 	case StatusPass:
-		a.passedTests++
+		util.Printer.BoldGreen.Print("     Passed")
 	case StatusFail:
-		a.failedTests++
+		util.Printer.Red.Print("     Failed")
 	case StatusSkip:
-		a.skippedTests++
+		util.Printer.Cyan.Print("     Skipped")
 	}
-
-	// Check for panic or other critical errors
-	if strings.Contains(line, "panic:") || strings.Contains(line, "fatal error:") {
-		a.status = StatusFail
-	}
+	fmt.Fprintf(a.wr, " %s.%s in %s\n", formatPackage(name, a.moduleName), uv.TestName, uv.Elapsed.String())
 }
 
-func parseUnitTest(line string) UnitTest {
-	var ut UnitTest
-	var parts []string
-	if strings.HasPrefix(line, passTestPrefix) || strings.HasPrefix(line, "ok") {
-		ut.Status = StatusPass
-		parts = strings.Fields(strings.TrimPrefix(line, passTestPrefix))
-	} else if strings.HasPrefix(line, failTestPrefix) {
-		ut.Status = StatusFail
-		parts = strings.Fields(strings.TrimPrefix(line, failTestPrefix))
-	} else if strings.HasPrefix(line, skipTestPrefix) {
-		ut.Status = StatusSkip
-		parts = strings.Fields(strings.TrimPrefix(line, skipTestPrefix))
-	}
-	if len(parts) > 0 {
-		ut.Name = parts[0]
-	}
-	return ut
+func (a *LinesOutputAnalyzer) printUnitTestEvent(name string, uv *UnitTestEvent) {
+	util.Printer.BoldGreen.Print("     Running")
+	fmt.Fprintf(a.wr, " %s.%s\n", formatPackage(name, a.moduleName), uv.TestName)
 }
 
-// GetResult returns the analysis result of all captured output
-func (a *LinesOutputAnalyzer) GetResult() *TestResult {
-	return &TestResult{
-		Status:        a.status,
-		PassedTests:   a.passedTests,
-		FailedTests:   a.failedTests,
-		SkippedTests:  a.skippedTests,
-		HasBuildError: a.hasBuildError,
-		TestDuration:  a.testDuration,
+func formatPackage(s1, s2 string) string {
+	s2 = strings.TrimPrefix(strings.TrimPrefix(s1, s2), "/")
+	if s2 == "" {
+		return "."
 	}
+	return s2
 }
 
-func (r *TestResult) IsSuccess() bool {
-	return (r.Status == StatusPass || r.Status == StatusSkip) && r.FailedTests == 0 && !r.HasBuildError
-}
-
-func (r *TestResult) IsFailed() bool {
-	return r.Status == StatusFail || r.Status == StatusBuildFail || r.FailedTests > 0
+func prettyStatus(status TestStatus) string {
+	switch status {
+	case StatusPass:
+		return util.Printer.BoldGreen.Sprint(status.String())
+	case StatusFail, StatusBuildFail:
+		return util.Printer.Red.Sprint(status.String())
+	case StatusSkip:
+		return util.Printer.Cyan.Sprint(status.String())
+	default:
+		return util.Printer.Yellow.Sprint(status.String())
+	}
 }
