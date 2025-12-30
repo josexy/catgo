@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"text/tabwriter"
@@ -50,6 +52,13 @@ func (status TestStatus) String() string {
 	return "UNKNOWN"
 }
 
+type TestMode uint
+
+const (
+	UnitTest TestMode = 1 << iota
+	Benchmark
+)
+
 type TestEvent struct {
 	// encodes as an RFC3339-format string
 	Time time.Time
@@ -75,10 +84,19 @@ type PackageTestEvent struct {
 	Status      TestStatus
 	Elapsed     time.Duration
 	UnitTests   map[string]*UnitTestEvent
+	Benches     map[string]*BenchmarkEvent
 
 	PassedTests  int
 	FailedTests  int
 	SkippedTests int
+}
+
+type BenchmarkEvent struct {
+	TestName    string
+	Iterations  int64
+	NsPerOp     time.Duration
+	BytesPerOp  int64
+	AllocsPerOp int64
 }
 
 type UnitTestEvent struct {
@@ -93,17 +111,26 @@ type LinesOutputAnalyzer struct {
 	wr          io.Writer
 	currentLine bytes.Buffer
 
-	moduleName string
-	verbose    bool
-	wg         sync.WaitGroup
+	verbose       bool
+	moduleName    string
+	lastBenchTest string // for bench
+	cpus          []string
+	mode          TestMode
+	wg            sync.WaitGroup
 
 	events map[string]*PackageTestEvent
 }
 
-func New(reader io.Reader, moduleName string, verbose bool) *LinesOutputAnalyzer {
+func New(reader io.Reader, moduleName string, mode TestMode, cpus []string, verbose bool) *LinesOutputAnalyzer {
+	if len(cpus) == 0 {
+		maxprocs := runtime.GOMAXPROCS(0)
+		cpus = []string{strconv.Itoa(maxprocs)}
+	}
 	analyzer := &LinesOutputAnalyzer{
 		moduleName: moduleName,
 		verbose:    verbose,
+		mode:       mode,
+		cpus:       cpus,
 		wr:         util.Output,
 		br:         bufio.NewReader(reader),
 		events:     make(map[string]*PackageTestEvent, 128),
@@ -176,34 +203,45 @@ func (a *LinesOutputAnalyzer) printTestSummary() {
 	)
 }
 
-func (a *LinesOutputAnalyzer) analyzeEvent(event *TestEvent) error {
+func (a *LinesOutputAnalyzer) analyzeEvent(event *TestEvent) (err error) {
 	switch event.Action {
 	case "start":
 		pv := &PackageTestEvent{
 			PackageName: event.Package,
 			Status:      StatusUnknown,
 			UnitTests:   make(map[string]*UnitTestEvent, 16),
+			Benches:     make(map[string]*BenchmarkEvent, 16),
 		}
 		a.events[event.Package] = pv
 		a.printPackageEvent(pv)
 	case "run":
-		pv, ok := a.events[event.Package]
-		if !ok {
-			return fmt.Errorf("invalid [%s] event for package: %s", event.Action, event.Package)
+		pv, err := a.getPackageTestEvent(event)
+		if err != nil {
+			return err
 		}
-		uv := &UnitTestEvent{
-			TestName: event.Test,
-			Time:     event.Time,
-			Status:   StatusUnknown,
+		if a.mode&UnitTest == UnitTest {
+			pv.UnitTests[event.Test] = &UnitTestEvent{
+				TestName: event.Test,
+				Time:     event.Time,
+				Status:   StatusUnknown,
+			}
 		}
-		pv.UnitTests[event.Test] = uv
-		a.printUnitTestEvent(event.Package, uv)
+		a.lastBenchTest = event.Test
+		a.printRunningTestEvent(event.Package, event.Test)
 	case "build-output", "output":
-		if a.verbose && len(event.Output) > 0 {
+		if (a.verbose || a.mode&Benchmark == Benchmark) && len(event.Output) > 0 {
 			if filterNoneOutputTestLog(event.Output) {
 				break
 			}
-			fmt.Fprint(a.wr, event.Output)
+			cont := true
+			if a.mode&Benchmark == Benchmark {
+				if cont, err = a.tryAnalyzeBenchResult(a.lastBenchTest, event); err != nil {
+					return
+				}
+			}
+			if a.verbose && cont {
+				fmt.Fprint(a.wr, event.Output)
+			}
 		}
 	case "pass":
 		return a.updateEvent(event, StatusPass)
@@ -215,21 +253,56 @@ func (a *LinesOutputAnalyzer) analyzeEvent(event *TestEvent) error {
 	return nil
 }
 
-func filterNoneOutputTestLog(s string) bool {
-	return strings.HasPrefix(s, runTestPrefix) ||
-		strings.HasPrefix(s, passTestPrefix) ||
-		strings.HasPrefix(s, skipTestPrefix) ||
-		strings.HasPrefix(s, failTestPrefix) ||
-		strings.HasPrefix(s, bigPass) ||
-		strings.HasPrefix(s, bigFailNewLine) ||
-		strings.HasPrefix(s, noTestPrefix) ||
-		strings.HasPrefix(s, okPrefix)
+func (a *LinesOutputAnalyzer) tryAnalyzeBenchResult(testName string, event *TestEvent) (bool, error) {
+	for _, cpu := range a.cpus {
+		// for example:
+		// BenchmarkStringConcat-2           174219              6846 ns/op           21080 B/op         99 allocs/op
+		// BenchmarkStringConcat-4           133303              7665 ns/op           21080 B/op         99 allocs/op
+		if strings.HasPrefix(event.Output, testName+"-"+cpu+" ") {
+			pv, err := a.getPackageTestEvent(event)
+			if err != nil {
+				return false, err
+			}
+			var bench BenchmarkEvent
+			fields := strings.Fields(event.Output)
+			if len(fields) > 0 {
+				bench.TestName = fields[0] // real test name
+			}
+			if len(fields) > 1 {
+				bench.Iterations, _ = strconv.ParseInt(fields[1], 10, 64)
+			}
+			if len(fields) > 3 {
+				bench.NsPerOp, _ = time.ParseDuration(strings.TrimSuffix(fields[2], " ns/op") + "ns")
+			}
+			if len(fields) > 5 {
+				bench.BytesPerOp, _ = strconv.ParseInt(strings.TrimSuffix(fields[4], " B/op"), 10, 64)
+			}
+			if len(fields) > 7 {
+				bench.AllocsPerOp, _ = strconv.ParseInt(strings.TrimSuffix(fields[6], " allocs/op"), 10, 64)
+			}
+			if len(bench.TestName) > 0 {
+				pv.PassedTests++ // mark as passed...
+				pv.Benches[bench.TestName] = &bench
+				a.printBenchmarkEventResult(event.Package, &bench)
+			}
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (a *LinesOutputAnalyzer) getPackageTestEvent(event *TestEvent) (*PackageTestEvent, error) {
+	pv, ok := a.events[event.Package]
+	if !ok {
+		return nil, fmt.Errorf("invalid [%s] event for package: %s", event.Action, event.Package)
+	}
+	return pv, nil
 }
 
 func (a *LinesOutputAnalyzer) updateEvent(event *TestEvent, status TestStatus) error {
-	pv, ok := a.events[event.Package]
-	if !ok {
-		return fmt.Errorf("invalid [%s] event for package: %s", event.Action, event.Package)
+	pv, err := a.getPackageTestEvent(event)
+	if err != nil {
+		return err
 	}
 	if event.Test != "" {
 		if uv, ok := pv.UnitTests[event.Test]; ok {
@@ -288,9 +361,15 @@ func (a *LinesOutputAnalyzer) printUnitTestEventResult(name string, uv *UnitTest
 	fmt.Fprintf(a.wr, " %s.%s in %s\n", formatPackage(name, a.moduleName), uv.TestName, uv.Elapsed.String())
 }
 
-func (a *LinesOutputAnalyzer) printUnitTestEvent(name string, uv *UnitTestEvent) {
+func (a *LinesOutputAnalyzer) printBenchmarkEventResult(name string, be *BenchmarkEvent) {
+	util.Printer.BoldGreen.Print("     Done")
+	fmt.Fprintf(a.wr, " %s.%s in %d iterations, %s/op, %d B/op, %d allocs/op\n",
+		formatPackage(name, a.moduleName), be.TestName, be.Iterations, be.NsPerOp.String(), be.BytesPerOp, be.AllocsPerOp)
+}
+
+func (a *LinesOutputAnalyzer) printRunningTestEvent(name, testName string) {
 	util.Printer.BoldGreen.Print("     Running")
-	fmt.Fprintf(a.wr, " %s.%s\n", formatPackage(name, a.moduleName), uv.TestName)
+	fmt.Fprintf(a.wr, " %s.%s\n", formatPackage(name, a.moduleName), testName)
 }
 
 func formatPackage(s1, s2 string) string {
@@ -312,4 +391,15 @@ func prettyStatus(status TestStatus) string {
 	default:
 		return util.Printer.Yellow.Sprint(status.String())
 	}
+}
+
+func filterNoneOutputTestLog(s string) bool {
+	return strings.HasPrefix(s, runTestPrefix) ||
+		strings.HasPrefix(s, passTestPrefix) ||
+		strings.HasPrefix(s, skipTestPrefix) ||
+		strings.HasPrefix(s, failTestPrefix) ||
+		strings.HasPrefix(s, bigPass) ||
+		strings.HasPrefix(s, bigFailNewLine) ||
+		strings.HasPrefix(s, noTestPrefix) ||
+		strings.HasPrefix(s, okPrefix)
 }

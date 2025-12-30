@@ -138,6 +138,9 @@ catgo test --package ./cmd
 # Run specific tests matching a pattern
 catgo test --run ^TestBuild
 
+# Skip tests matching a pattern
+catgo test --skip ^TestSlow
+
 # Run tests multiple times to catch flaky tests
 catgo test --count 10
 
@@ -146,6 +149,45 @@ catgo test --race
 
 # Set a timeout for tests
 catgo test --timeout 30s
+
+# Stop after first test failure
+catgo test --fail-fast
+
+# Show full file paths in error messages
+catgo test --full-path
+
+# Run tests with specific CPU counts
+catgo test --cpu 1,2,4
+
+# Generate coverage profile
+catgo test --cover-profile cover.prof
+
+# Generate CPU profile
+catgo test --cpu-profile cpu.prof
+
+# Generate memory profile
+catgo test --mem-profile mem.prof
+
+# Generate block profile
+catgo test --block-profile block.prof
+
+# Generate mutex profile
+catgo test --mutex-profile mutex.prof
+
+# Run benchmarks
+catgo test --bench
+
+# Run benchmarks matching a pattern
+catgo test --bench --run ^BenchmarkStringConcat
+
+# Run benchmarks with tests
+catgo test --bench --bench-test
+
+# Run benchmarks with memory stats
+catgo test --bench --bench-mem
+
+# Run benchmarks for specific duration
+catgo test --bench --bench-time 10s
 
 # Combine multiple options
 catgo test --package ./internal/util --run ^TestExec --verbose --count 3
@@ -222,12 +264,31 @@ Remove dependencies from the project.
 Run tests for the local package with enhanced output formatting.
 
 **Flags:**
-- `-r, --run <pattern>`: Run only tests matching the regular expression (default: `^Test`)
+- `-r, --run <pattern>`: Run only tests matching the regular expression
+- `-s, --skip <pattern>`: Skip tests matching the regular expression
 - `-p, --package <path>`: Package to test (default: `./...` for all packages)
 - `-c, --count <n>`: Number of times to run each test (default: 1)
 - `-t, --timeout <duration>`: Time limit for each test (e.g., `30s`, `5m`)
 - `--race`: Enable race detector
 - `-v, --verbose`: Show verbose output including test logs
+- `--full-path`: Show full file names in error messages
+- `--fail-fast`: Do not start new tests after the first test failure
+- `--cpu <list>`: Comma-separated list of CPU counts to run each test with
+
+**Benchmark Flags:**
+- `-b, --bench`: Run only benchmarks matching regexp via --run
+- `--bench-test`: Run benchmarks with tests too
+- `--bench-mem`: Print memory allocations for benchmarks
+- `--bench-time <duration>`: Run each benchmark for duration d or N times if `d` is of the form Nx
+
+**Profiling Flags:**
+- `--block-profile <file>`: Write block profile to file
+- `--cover-profile <file>`: Write coverage profile to file
+- `--cpu-profile <file>`: Write CPU profile to file
+- `--mem-profile <file>`: Write memory profile to file
+- `--mutex-profile <file>`: Write mutex profile to file
+
+**Additional:**
 - Use `--` to pass additional arguments to the test binary
 
 **Note:** This command wraps `go test -json` and provides colorized, formatted output with test summaries.
