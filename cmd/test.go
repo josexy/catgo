@@ -139,6 +139,9 @@ func buildTestArgs(args []string) []string {
 			testArgs = append(testArgs, "-benchtime", testBenchTime.String())
 		}
 	}
+	if testRunExpr == "" {
+		testRunExpr = "^Test"
+	}
 	if testRunExpr != "" {
 		testArgs = append(testArgs, "-run", testRunExpr)
 	}
