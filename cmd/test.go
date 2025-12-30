@@ -15,12 +15,15 @@ import (
 const allPackagesSuffix = "/..."
 
 var (
-	testCount   int
-	testVerbose bool
-	testRace    bool
-	testPackage string
-	testRunF    string
-	testTimeout time.Duration
+	testCount    int
+	testVerbose  bool
+	testRace     bool
+	testFullPath bool
+	testFailFast bool
+	testPackage  string
+	testRunExpr  string
+	testSkipExpr string
+	testTimeout  time.Duration
 )
 
 var testCommand = &cobra.Command{
@@ -31,12 +34,15 @@ var testCommand = &cobra.Command{
 }
 
 func init() {
-	testCommand.Flags().StringVarP(&testRunF, "run", "r", "^Test", "Run only those tests matching the regular expression")
+	testCommand.Flags().StringVarP(&testRunExpr, "run", "r", "^Test", "Run only those tests matching the regular expression")
+	testCommand.Flags().StringVarP(&testSkipExpr, "skip", "s", "", "Skip tests matching the regular expression")
 	testCommand.Flags().StringVarP(&testPackage, "package", "p", "./...", "The package to test, default to all packages")
 	testCommand.Flags().IntVarP(&testCount, "count", "c", 1, "The number of times to run each test")
 	testCommand.Flags().DurationVarP(&testTimeout, "timeout", "t", 0, "The time limit for each test")
 	testCommand.Flags().BoolVar(&testRace, "race", false, "Enable race detector")
 	testCommand.Flags().BoolVarP(&testVerbose, "verbose", "v", false, "Show output from tests")
+	testCommand.Flags().BoolVar(&testFullPath, "fullpath", false, "Show full file names in error messages")
+	testCommand.Flags().BoolVar(&testFailFast, "failfast", false, "Do not start new tests after the first test failure")
 }
 
 func runTest(cmd *cobra.Command, args []string) error {
@@ -62,8 +68,17 @@ func execGoTest(moduleName string, args []string) error {
 	}
 
 	testArgs := []string{"test"}
-	if testRunF != "" {
-		testArgs = append(testArgs, "-run", testRunF)
+	if testRunExpr != "" {
+		testArgs = append(testArgs, "-run", testRunExpr)
+	}
+	if testSkipExpr != "" {
+		testArgs = append(testArgs, "-skip", testSkipExpr)
+	}
+	if testFailFast {
+		testArgs = append(testArgs, "-failfast")
+	}
+	if testFullPath {
+		testArgs = append(testArgs, "-fullpath")
 	}
 	if testCount > 0 {
 		testArgs = append(testArgs, "-count", strconv.Itoa(testCount))
@@ -85,10 +100,7 @@ func execGoTest(moduleName string, args []string) error {
 
 	go func() {
 		defer pw.Close()
-		errCh <- util.Exec(ctx, "go", testArgs, nil, util.ExecIO{
-			Stdout: pw,
-			Stderr: pw,
-		})
+		errCh <- util.Exec(ctx, "go", testArgs, nil, util.ExecIO{Stdout: pw, Stderr: pw})
 	}()
 
 	analyzer.Wait()
