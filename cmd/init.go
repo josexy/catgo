@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -59,7 +60,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	util.Printer.PrintCreated(fmt.Sprintf("package `%s`", moduleName))
 
-	if err := util.Exec("go", []string{"mod", "init", moduleName}, nil); err != nil {
+	if err := util.Exec(context.Background(), "go", []string{"mod", "init", moduleName}, nil); err != nil {
 		return err
 	}
 
@@ -77,7 +78,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	if initGitRepo {
 		if !util.PathExist(".git") {
-			if err := util.Exec("git", []string{"init"}, nil); err != nil {
+			if err := util.Exec(context.Background(), "git", []string{"init"}, nil); err != nil {
 				util.Printer.PrintWarning(fmt.Sprintf("could not initialize git repository: %v", err))
 			}
 		}

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"io"
 	"strconv"
 	"strings"
@@ -77,19 +78,21 @@ func execGoTest(moduleName string, args []string) error {
 	testArgs = append(testArgs, testPackage)
 	testArgs = append(testArgs, args...)
 
+	errCh := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
 	pr, pw := io.Pipe()
 	analyzer := test.New(pr, moduleName, testVerbose)
-	defer func() {
-		pw.Close()      // first close pipe writer
-		analyzer.Wait() // then quit the read sync loop
+
+	go func() {
+		defer pw.Close()
+		errCh <- util.Exec(ctx, "go", testArgs, nil, util.ExecIO{
+			Stdout: pw,
+			Stderr: pw,
+		})
 	}()
 
-	waitFn, err := util.ExecImmediate("go", testArgs, nil, util.ExecIO{
-		Stdout: pw,
-		Stderr: pw,
-	})
-	if err != nil {
-		return err
-	}
-	return waitFn()
+	analyzer.Wait()
+	pr.Close()
+	cancel()
+	return <-errCh
 }

@@ -26,6 +26,8 @@ const (
 	okPrefix       = "ok  \t"
 )
 
+var ignoreSymlinkPrefix = []byte("warning: ignoring symlink")
+
 type TestStatus int
 
 const (
@@ -123,11 +125,17 @@ func (a *LinesOutputAnalyzer) runner() {
 			}
 			break
 		}
+		if bytes.HasPrefix(line, ignoreSymlinkPrefix) {
+			util.Printer.PrintWarning(string(line))
+			continue
+		}
 		var event TestEvent
 		if err = json.Unmarshal(line, &event); err != nil {
+			util.Printer.PrintError(fmt.Sprintf("failed to parse line: `%s`, %v", line, err))
 			break
 		}
 		if err = a.analyzeEvent(&event); err != nil {
+			util.Printer.PrintError(fmt.Sprintf("failed to analyze event: %v", err))
 			break
 		}
 	}

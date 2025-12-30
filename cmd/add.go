@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -53,7 +54,7 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		util.Printer.PrintUpdating(fmt.Sprintf("module %s go.mod and go.sum", moduleName))
 		util.Printer.PrintAdding(pkg)
 
-		if err = util.Exec("go", []string{"get", pkg}, nil); err != nil {
+		if err = util.Exec(context.Background(), "go", []string{"get", pkg}, nil); err != nil {
 			return err
 		}
 	}

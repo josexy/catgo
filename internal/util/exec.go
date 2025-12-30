@@ -1,6 +1,7 @@
 package util
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -33,8 +34,8 @@ func FormatCommandArgs(command string, args []string) string {
 	return command + " " + strings.Join(args, " ")
 }
 
-func ExecImmediate(command string, args []string, env []string, io ...ExecIO) (func() error, error) {
-	cmd := exec.Command(command, args...)
+func ExecImmediate(ctx context.Context, command string, args []string, env []string, io ...ExecIO) (func() error, error) {
+	cmd := exec.CommandContext(ctx, command, args...)
 	if len(io) > 0 {
 		cmd.Stdin = io[0].Stdin
 		cmd.Stdout = io[0].Stdout
@@ -68,19 +69,19 @@ func ExecImmediate(command string, args []string, env []string, io ...ExecIO) (f
 	}, nil
 }
 
-func Exec(command string, args []string, env []string, io ...ExecIO) error {
-	waitFn, err := ExecImmediate(command, args, env, io...)
+func Exec(ctx context.Context, command string, args []string, env []string, io ...ExecIO) error {
+	waitFn, err := ExecImmediate(ctx, command, args, env, io...)
 	if err != nil {
 		return err
 	}
 	return waitFn()
 }
 
-func ExecProcess(command string, args []string, env []string) error {
+func ExecProcess(ctx context.Context, command string, args []string, env []string) error {
 	if runtime.GOOS == "windows" {
-		return Exec(command, args, env)
+		return Exec(ctx, command, args, env)
 	}
-	cmd := exec.Command(command, args...)
+	cmd := exec.CommandContext(ctx, command, args...)
 	if cmd.Path == "" && cmd.Err != nil {
 		return fmt.Errorf("could not lookup path: `%s`: %w", command, cmd.Err)
 	}
@@ -94,8 +95,8 @@ func ExecProcess(command string, args []string, env []string) error {
 	return nil
 }
 
-func ExecResult(command string, args []string, env []string) ([]byte, error) {
-	cmd := exec.Command(command, args...)
+func ExecResult(ctx context.Context, command string, args []string, env []string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Env = cmd.Environ()
 	if len(env) > 0 {
 		cmd.Env = append(cmd.Env, env...)

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -77,7 +78,7 @@ func runRemove(cmd *cobra.Command, args []string) error {
 	}
 
 	util.Printer.PrintUpdating("go.mod and go.sum")
-	if err = util.Exec("go", []string{"mod", "tidy"}, nil); err != nil {
+	if err = util.Exec(context.Background(), "go", []string{"mod", "tidy"}, nil); err != nil {
 		return err
 	}
 	return nil

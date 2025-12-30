@@ -2,6 +2,7 @@ package util
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -41,7 +42,7 @@ func WriteFile(name string, data []byte) error {
 }
 
 func CurrentGoModFile() (string, error) {
-	output, err := ExecResult("go", []string{"env", "GOMOD"}, nil)
+	output, err := ExecResult(context.Background(), "go", []string{"env", "GOMOD"}, nil)
 	if err != nil {
 		return "", fmt.Errorf("could not find go.mod file: %w", err)
 	}

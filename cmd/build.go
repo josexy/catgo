@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -129,7 +130,7 @@ func runBuild(_ *cobra.Command, _ []string) (string, error) {
 
 	bldArgs = append(bldArgs, buildPackage)
 
-	if err = util.Exec("go", bldArgs, env); err != nil {
+	if err = util.Exec(context.Background(), "go", bldArgs, env); err != nil {
 		return "", err
 	}
 

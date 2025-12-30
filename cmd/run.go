@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"path/filepath"
 
 	"github.com/josexy/catgo/internal/util"
@@ -51,7 +52,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 	}
 
 	util.Printer.PrintRunning(util.FormatCommandArgs(relTarget, args))
-	if err = util.ExecProcess(target, args, nil); err != nil {
+	if err = util.ExecProcess(context.Background(), target, args, nil); err != nil {
 		return err
 	}
 	return nil

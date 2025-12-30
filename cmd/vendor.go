@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/josexy/catgo/internal/util"
@@ -22,7 +23,7 @@ func runVendor(cmd *cobra.Command, args []string) error {
 
 	util.Printer.PrintVendoring(fmt.Sprintf("vendor %s dependencies", moduleName))
 
-	if err := util.Exec("go", []string{"mod", "vendor"}, nil); err != nil {
+	if err := util.Exec(context.Background(), "go", []string{"mod", "vendor"}, nil); err != nil {
 		return err
 	}
 
