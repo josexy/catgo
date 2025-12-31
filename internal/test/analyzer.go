@@ -107,13 +107,13 @@ type UnitTestEvent struct {
 }
 
 type LinesOutputAnalyzer struct {
-	br          *bufio.Reader
-	wr          io.Writer
-	currentLine bytes.Buffer
+	br *bufio.Reader
+	wr io.Writer
 
 	verbose       bool
 	moduleName    string
 	lastBenchTest string // for bench
+	benchBuf      bytes.Buffer
 	cpus          []string
 	mode          TestMode
 	wg            sync.WaitGroup
@@ -255,16 +255,36 @@ func (a *LinesOutputAnalyzer) analyzeEvent(event *TestEvent) (err error) {
 
 func (a *LinesOutputAnalyzer) tryAnalyzeBenchResult(testName string, event *TestEvent) (bool, error) {
 	for _, cpu := range a.cpus {
-		// for example:
+		// Output looks like:
 		// BenchmarkStringConcat-2           174219              6846 ns/op           21080 B/op         99 allocs/op
 		// BenchmarkStringConcat-4           133303              7665 ns/op           21080 B/op         99 allocs/op
-		if strings.HasPrefix(event.Output, testName+"-"+cpu+" ") {
+		//
+		// But sometimes the Output may look like, so we have to handle this case with buffer:
+		// "BenchmarkStringConcat-2     \t"
+		// "  1290205\t       933.7 ns/op\n"
+		// "BenchmarkStringConcat-4     \t"
+		// "  1290205\t       933.7 ns/op\n"
+		if a.benchBuf.Len() > 0 || strings.HasPrefix(event.Output, testName+"-"+cpu+" ") {
+			// if the output doesn't end with \n then add it to the buffer
+			if event.Output[len(event.Output)-1] != '\n' {
+				a.benchBuf.WriteString(event.Output)
+				return false, nil
+			}
+
+			benchOutput := event.Output
+			// if the buffer is not empty mean that the output is split into multiple lines
+			if a.benchBuf.Len() > 0 {
+				a.benchBuf.WriteString(event.Output)
+				benchOutput = a.benchBuf.String()
+				a.benchBuf.Reset()
+			}
+
 			pv, err := a.getPackageTestEvent(event)
 			if err != nil {
 				return false, err
 			}
 			var bench BenchmarkEvent
-			fields := strings.Fields(event.Output)
+			fields := strings.Fields(benchOutput)
 			if len(fields) > 0 {
 				bench.TestName = fields[0] // real test name
 			}
