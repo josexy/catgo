@@ -12,7 +12,7 @@ LDFLAGS+=-X "$(MODULE)/version.GitCommit=$(GIT_COMMIT)"
 LDFLAGS+=-X "$(MODULE)/version.BuildTime=$(BUILD_TIME)"
 LDFLAGS+=-X "$(MODULE)/version.GoVersion=$(GO_VERSION)"
 
-GOBUILD=CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)'
+GOBUILD=CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)'
 
 UNIX_ARCH_LIST = \
 	darwin-amd64 \
